@@ -39,10 +39,6 @@ class Tello:
     RETRY_COUNT = 3  # number of retries after a failed command
     TELLO_IP = '192.168.10.1'  # Tello IP address
 
-    # Video stream, server socket
-    VS_UDP_IP = '0.0.0.0'
-    VS_UDP_PORT = 11111
-
     CONTROL_UDP_PORT = 8889
     STATE_UDP_PORT = 8890
 
@@ -100,7 +96,6 @@ class Tello:
                  retry_count=RETRY_COUNT):
 
         global threads_initialized, client_socket, drones
-
         self.address = (host, Tello.CONTROL_UDP_PORT)
         self.stream_on = False
         self.retry_count = retry_count
@@ -395,8 +390,8 @@ class Tello:
     def get_udp_video_address(self) -> str:
         """Internal method, you normally wouldn't call this youself.
         """
-        address_schema = 'udp://{ip}:{port}'  # + '?overrun_nonfatal=1&fifo_size=5000'
-        address = address_schema.format(ip=self.VS_UDP_IP, port=self.VS_UDP_PORT)
+        address_schema = 'udp://0.0.0.0:{port}'  # + '?overrun_nonfatal=1&fifo_size=5000'
+        address = address_schema.format(port=self.video_stream_port)
         return address
 
     def get_frame_read(self) -> 'BackgroundFrameRead':
@@ -838,6 +833,7 @@ class Tello:
         While you can use this command to reconfigure the Tello this library currently does not support
         non-default ports (TODO!)
         """
+        self.video_stream_port = video_stream_port
         cmd = 'port {} {}'.format(state_packet_port, video_stream_port)
         self.send_control_command(cmd)
 
@@ -1027,6 +1023,7 @@ class BackgroundFrameRead:
         # According to issue #90 the decoder might need some time
         # https://github.com/damiafuentes/DJITelloPy/issues/90#issuecomment-855458905
         try:
+            # TODO check out parameters http://underpop.online.fr/f/ffmpeg/help/format-options.htm.gz
             Tello.LOGGER.debug('trying to grab video frames...')
             self.container = av.open(self.address, timeout=(Tello.FRAME_GRAB_TIMEOUT, None))
         except av.error.ExitError:
