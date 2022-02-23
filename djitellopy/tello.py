@@ -93,7 +93,8 @@ class Tello:
 
     def __init__(self,
                  host=TELLO_IP,
-                 retry_count=RETRY_COUNT):
+                 retry_count=RETRY_COUNT,
+                 state_update_callback=None):
 
         global threads_initialized, client_socket, drones
         self.address = (host, Tello.CONTROL_UDP_PORT)
@@ -101,6 +102,8 @@ class Tello:
         self.retry_count = retry_count
         self.last_received_command_timestamp = time.time()
         self.last_rc_control_timestamp = time.time()
+
+        self.state_update_callback = state_update_callback
 
         if not threads_initialized:
             # Run Tello command responses UDP receiver on background
@@ -117,7 +120,7 @@ class Tello:
 
             threads_initialized = True
 
-        drones[host] = {'responses': [], 'state': {}}
+        drones[host] = {'responses': [], 'state': {}, 'drone': self}
 
         self.LOGGER.info("Tello instance was initialized. Host: '{}'. Port: '{}'.".format(host, Tello.CONTROL_UDP_PORT))
 
@@ -137,21 +140,18 @@ class Tello:
         Must be run from a background thread in order to not block the main thread.
         Internal method, you normally wouldn't call this yourself.
         """
+
         while True:
-            try:
-                data, address = client_socket.recvfrom(1024)
+            data, address = client_socket.recvfrom(1024)
 
-                address = address[0]
-                Tello.LOGGER.debug('Data received from {} at client_socket'.format(address))
+            address = address[0]
+            Tello.LOGGER.debug('Data received from {} at client_socket'.format(address))
 
-                if address not in drones:
-                    continue
+            if address not in drones:
+                continue
 
-                drones[address]['responses'].append(data)
+            drones[address]['responses'].append(data)
 
-            except Exception as e:
-                Tello.LOGGER.error(e)
-                break
 
     @staticmethod
     def udp_state_receiver():
@@ -164,21 +164,20 @@ class Tello:
         state_socket.bind(("", Tello.STATE_UDP_PORT))
 
         while True:
-            try:
-                data, address = state_socket.recvfrom(1024)
+            data, address = state_socket.recvfrom(1024)
 
-                address = address[0]
-                Tello.LOGGER.debug('Data received from {} at state_socket'.format(address))
+            address = address[0]
+            Tello.LOGGER.debug('Data received from {} at state_socket'.format(address))
 
-                if address not in drones:
-                    continue
+            if address not in drones:
+                continue
 
-                data = data.decode('ASCII')
-                drones[address]['state'] = Tello.parse_state(data)
+            data = data.decode('ASCII')
 
-            except Exception as e:
-                Tello.LOGGER.error(e)
-                break
+            state = Tello.parse_state(data)
+            drones[address]['state'] = state
+            drones[address]['drone'].state_update_callback(state)
+
 
     @staticmethod
     def parse_state(state: str) -> Dict[str, Union[int, float, str]]:
