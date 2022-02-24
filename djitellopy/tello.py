@@ -8,6 +8,8 @@ import time
 from threading import Lock, Thread
 from typing import Optional, Union, Type, Dict
 
+from cv2 import add
+
 from rospy import sleep
 
 from .enforce_types import enforce_types
@@ -114,6 +116,10 @@ class Tello:
         self.av_open_lock = av_open_lock
         self.video_frontend = video_frontend
 
+        self.last_packet_received = 0
+        self.last_video_frame_received = 0
+        self.is_alive = False
+
         if not threads_initialized:
             # Run Tello command responses UDP receiver on background
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -158,7 +164,8 @@ class Tello:
 
             if address not in drones:
                 continue
-
+            
+            drones[address]['drone'].last_packet_received = time.time()
             drones[address]['responses'].append(data)
 
 
@@ -186,6 +193,7 @@ class Tello:
             state = Tello.parse_state(data)
             drones[address]['state'] = state
             drones[address]['drone'].state_update_callback(state)
+            drones[address]['drone'].last_packet_received = time.time()
 
 
     @staticmethod
@@ -402,7 +410,7 @@ class Tello:
         address = address_schema.format(port=self.video_stream_port)
         return address
 
-    def get_frame_read(self) -> 'BackgroundFrameRead':
+    def get_frame_read(self, callback) -> 'BackgroundFrameRead':
         """Get the BackgroundFrameRead object from the camera drone. Then, you just need to call
         backgroundFrameRead.frame to get the actual frame received by the drone.
         Returns:
@@ -410,7 +418,7 @@ class Tello:
         """
         if self.background_frame_read is None:
             address = self.get_udp_video_address()
-            self.background_frame_read = BackgroundFrameRead(self, address)
+            self.background_frame_read = BackgroundFrameRead(self, address, callback)
             self.background_frame_read.start()
         return self.background_frame_read
 
@@ -472,6 +480,7 @@ class Tello:
             response = self.send_command_with_return(command, timeout=timeout)
 
             if 'ok' in response.lower():
+                self.is_alive = True
                 return True
 
             self.LOGGER.debug("Command attempt #{} failed for command: '{}'".format(i, command))
@@ -1023,10 +1032,12 @@ class BackgroundFrameRead:
     backgroundFrameRead.frame to get the current frame.
     """
 
-    def __init__(self, tello, address):
+    def __init__(self, tello, address, callback):
+        self.tello = tello
         self.address = address
         self.frame = np.zeros([300, 400, 3], dtype=np.uint8)
         self.video_frontend = tello.video_frontend
+        self.callback = callback
 
         # Try grabbing frame with PyAV
         # According to issue #90 the decoder might need some time
@@ -1064,13 +1075,19 @@ class BackgroundFrameRead:
         if self.video_frontend == 'av':
             for frame in self.container.decode(video=0):
                 self.frame = np.array(frame.to_image())
+                self.callback(self.frame)
+                self.tello.last_video_frame_received = time.time()
+                self.is_alive = True
                 if self.stopped:
                     self.container.close()
                     break
         elif self.video_frontend == 'opencv':
             while True:
                 ret, frame = self.container.read()
-                self.frame = frame
+                self.frame = np.array(frame)
+                self.callback(self.frame)
+                self.tello.last_video_frame_received = time.time()
+                self.is_alive = True
 
                 if self.stopped:
                     self.container.release()    
