@@ -1024,7 +1024,7 @@ class BackgroundFrameRead:
         try:
             # TODO check out parameters http://underpop.online.fr/f/ffmpeg/help/format-options.htm.gz
             Tello.LOGGER.debug('trying to grab video frames...')
-            self.container = av.open(self.address, timeout=(Tello.FRAME_GRAB_TIMEOUT, None))
+            self.container = av.open(self.address, format="h264", timeout=(Tello.FRAME_GRAB_TIMEOUT, None))
         except av.error.ExitError:
             raise TelloException('Failed to grab video frames from video stream')
 
@@ -1041,14 +1041,11 @@ class BackgroundFrameRead:
         """Thread worker function to retrieve frames using PyAV
         Internal method, you normally wouldn't call this yourself.
         """
-        try:
-            for frame in self.container.decode(video=0):
-                self.frame = np.array(frame.to_image())
-                if self.stopped:
-                    self.container.close()
-                    break
-        except av.error.ExitError:
-            raise TelloException('Do not have enough frames for decoding, please try again or increase video fps before get_frame_read()')
+        for frame in self.container.decode(video=0):
+            self.frame = np.array(frame.to_image())
+            if self.stopped:
+                self.container.close()
+                break
 
     def stop(self):
         """Stop the frame update worker
