@@ -5,13 +5,17 @@
 import logging
 import socket
 import time
-from threading import Thread
+from threading import Lock, Thread
 from typing import Optional, Union, Type, Dict
+
+from rospy import sleep
 
 from .enforce_types import enforce_types
 
 import av
+import cv2 as cv
 import numpy as np
+import os
 
 
 threads_initialized = False
@@ -92,9 +96,12 @@ class Tello:
     is_flying = False
 
     def __init__(self,
-                 host=TELLO_IP,
-                 retry_count=RETRY_COUNT,
-                 state_update_callback=None):
+                state_update_callback,
+                av_open_lock,
+                video_frontend,
+                host=TELLO_IP,
+                retry_count=RETRY_COUNT,
+            ):
 
         global threads_initialized, client_socket, drones
         self.address = (host, Tello.CONTROL_UDP_PORT)
@@ -104,6 +111,8 @@ class Tello:
         self.last_rc_control_timestamp = time.time()
 
         self.state_update_callback = state_update_callback
+        self.av_open_lock = av_open_lock
+        self.video_frontend = video_frontend
 
         if not threads_initialized:
             # Run Tello command responses UDP receiver on background
@@ -1017,16 +1026,27 @@ class BackgroundFrameRead:
     def __init__(self, tello, address):
         self.address = address
         self.frame = np.zeros([300, 400, 3], dtype=np.uint8)
+        self.video_frontend = tello.video_frontend
 
         # Try grabbing frame with PyAV
         # According to issue #90 the decoder might need some time
         # https://github.com/damiafuentes/DJITelloPy/issues/90#issuecomment-855458905
-        try:
-            # TODO check out parameters http://underpop.online.fr/f/ffmpeg/help/format-options.htm.gz
-            Tello.LOGGER.debug('trying to grab video frames...')
-            self.container = av.open(self.address, format="h264", timeout=(Tello.FRAME_GRAB_TIMEOUT, None))
-        except av.error.ExitError:
-            raise TelloException('Failed to grab video frames from video stream')
+        # TODO check out parameters http://underpop.online.fr/f/ffmpeg/help/format-options.htm.gz
+        Tello.LOGGER.debug('trying to grab video frames...')
+        now = time.time()
+
+        if self.video_frontend == 'av':
+            with tello.av_open_lock:
+                self.container = av.open(self.address, format="h264")
+        elif self.video_frontend == 'opencv':
+            #os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'preset:ultrafast;vcodec:libx264;tune:zerolatency;pixel_format:yuv420p;video_size:960x720'
+            self.container = cv.VideoCapture(self.address,cv.CAP_FFMPEG)
+        else:
+            Tello.LOGGER.error("Stopped video process!")
+            Tello.LOGGER.error("Unknown video_frontend (%s). It can be either 'opencv' or 'av'." % self.video_frontend)
+            return
+
+        Tello.LOGGER.info('dt %.4f' % (time.time() - now))
 
         self.stopped = False
         self.worker = Thread(target=self.update_frame, args=(), daemon=True)
@@ -1041,11 +1061,22 @@ class BackgroundFrameRead:
         """Thread worker function to retrieve frames using PyAV
         Internal method, you normally wouldn't call this yourself.
         """
-        for frame in self.container.decode(video=0):
-            self.frame = np.array(frame.to_image())
-            if self.stopped:
-                self.container.close()
-                break
+        if self.video_frontend == 'av':
+            for frame in self.container.decode(video=0):
+                self.frame = np.array(frame.to_image())
+                if self.stopped:
+                    self.container.close()
+                    break
+        elif self.video_frontend == 'opencv':
+            while True:
+                ret, frame = self.container.read()
+                self.frame = frame
+
+                if self.stopped:
+                    self.container.release()    
+                    break
+        else:
+            raise Exception("Unsupported video frontend: %s" % self.video_frontend)
 
     def stop(self):
         """Stop the frame update worker
