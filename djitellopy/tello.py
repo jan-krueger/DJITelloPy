@@ -442,25 +442,25 @@ class Tello:
 
         responses = self.get_own_udp_object()['responses']
 
-        while not responses:
-            if time.time() - timestamp > timeout:
-                message = "Aborting command '{}'. Did not receive a response after {} seconds".format(command, timeout)
-                self.LOGGER.warning(message)
-                return message
-            time.sleep(0.1)  # Sleep during send command
+        #while not responses:
+        #    if time.time() - timestamp > timeout:
+        #        message = "Aborting command '{}'. Did not receive a response after {} seconds".format(command, timeout)
+        #        self.LOGGER.warning(message)
+        #        return message
+        #    time.sleep(0.1)  # Sleep during send command
 
         self.last_received_command_timestamp = time.time()
 
-        first_response = responses.pop(0)  # first datum from socket
-        try:
-            response = first_response.decode("utf-8")
-        except UnicodeDecodeError as e:
-            self.LOGGER.error(e)
-            return "response decode error"
-        response = response.rstrip("\r\n")
+        #first_response = responses.pop(0)  # first datum from socket
+        #try:
+        #    response = first_response.decode("utf-8")
+        #except UnicodeDecodeError as e:
+        #    self.LOGGER.error(e)
+        #    return "response decode error"
+        #response = response.rstrip("\r\n")
 
-        self.LOGGER.info("Response {}: '{}'".format(command, response))
-        return response
+        #self.LOGGER.info("Response {}: '{}'".format(command, response))
+        return "ok"
 
     def send_command_without_return(self, command: str):
         """Send command to Tello without expecting a response.
@@ -476,17 +476,19 @@ class Tello:
         Internal method, you normally wouldn't call this yourself.
         """
         response = "max retries exceeded"
-        for i in range(0, self.retry_count):
-            response = self.send_command_with_return(command, timeout=timeout)
+        response = self.send_command_with_return(command, timeout=timeout)
+        return True
 
-            if 'ok' in response.lower():
-                self.is_alive = True
-                return True
+        #for i in range(0, self.retry_count):
 
-            self.LOGGER.debug("Command attempt #{} failed for command: '{}'".format(i, command))
+        #    if 'ok' in response.lower():
+        #        self.is_alive = True
+        #        return True
 
-        self.raise_result_error(command, response)
-        return False # never reached
+        #    self.LOGGER.debug("Command attempt #{} failed for command: '{}'".format(i, command))
+
+        #self.raise_result_error(command, response)
+        #return False # never reached
 
     def send_read_command(self, command: str) -> str:
         """Send given command to Tello and wait for its response.
