@@ -98,9 +98,9 @@ class Tello:
     is_flying = False
 
     def __init__(self,
-                state_update_callback,
-                av_open_lock,
-                video_frontend,
+                state_update_callback=None,
+                av_open_lock=None,
+                video_frontend=None,
                 host=TELLO_IP,
                 retry_count=RETRY_COUNT,
             ):
@@ -192,7 +192,8 @@ class Tello:
 
             state = Tello.parse_state(data)
             drones[address]['state'] = state
-            drones[address]['drone'].state_update_callback(state)
+            if drones[address]['drone'] is not None:
+                drones[address]['drone'].state_update_callback(state)
             drones[address]['drone'].last_packet_received = time.time()
 
 
@@ -422,7 +423,7 @@ class Tello:
             self.background_frame_read.start()
         return self.background_frame_read
 
-    def send_command_with_return(self, command: str, timeout: int = RESPONSE_TIMEOUT) -> str:
+    def send_command_with_return(self, command: str, timeout: int = RESPONSE_TIMEOUT, robust: bool = False) -> str:
         """Send command to Tello and wait for its response.
         Internal method, you normally wouldn't call this yourself.
         Return:
@@ -440,27 +441,26 @@ class Tello:
 
         client_socket.sendto(command.encode('utf-8'), self.address)
 
-        responses = self.get_own_udp_object()['responses']
+        if robust:
+            responses = self.get_own_udp_object()['responses']
 
-        #while not responses:
-        #    if time.time() - timestamp > timeout:
-        #        message = "Aborting command '{}'. Did not receive a response after {} seconds".format(command, timeout)
-        #        self.LOGGER.warning(message)
-        #        return message
-        #    time.sleep(0.1)  # Sleep during send command
+            while not responses:
+                if time.time() - timestamp > timeout:
+                    message = "Aborting command '{}'. Did not receive a response after {} seconds".format(command, timeout)
+                    self.LOGGER.warning(message)
+                    return message
+                time.sleep(0.1)  # Sleep during send command
 
-        self.last_received_command_timestamp = time.time()
+            first_response = responses.pop(0)  # first datum from socket
+            try:
+                response = first_response.decode("utf-8")
+            except UnicodeDecodeError as e:
+                self.LOGGER.error(e)
+                return "response decode error"
+            response = response.rstrip("\r\n")
 
-        #first_response = responses.pop(0)  # first datum from socket
-        #try:
-        #    response = first_response.decode("utf-8")
-        #except UnicodeDecodeError as e:
-        #    self.LOGGER.error(e)
-        #    return "response decode error"
-        #response = response.rstrip("\r\n")
-
-        #self.LOGGER.info("Response {}: '{}'".format(command, response))
-        return "ok"
+            self.LOGGER.info("Response {}: '{}'".format(command, response))
+            return "ok"
 
     def send_command_without_return(self, command: str):
         """Send command to Tello without expecting a response.
@@ -471,24 +471,25 @@ class Tello:
         self.LOGGER.info("Send command (no response expected): '{}'".format(command))
         client_socket.sendto(command.encode('utf-8'), self.address)
 
-    def send_control_command(self, command: str, timeout: int = RESPONSE_TIMEOUT) -> bool:
+    def send_control_command(self, command: str, timeout: int = RESPONSE_TIMEOUT, robust:bool = False) -> bool:
         """Send control command to Tello and wait for its response.
         Internal method, you normally wouldn't call this yourself.
         """
         response = "max retries exceeded"
-        response = self.send_command_with_return(command, timeout=timeout)
+        response = self.send_command_with_return(command, timeout=timeout, robust=robust)
+
+        if robust:
+            for i in range(0, self.retry_count):
+
+                if 'ok' in response.lower():
+                    self.is_alive = True
+                    return True
+
+                self.LOGGER.debug("Command attempt #{} failed for command: '{}'".format(i, command))
+
+            self.raise_result_error(command, response)
+            return False # never reached
         return True
-
-        #for i in range(0, self.retry_count):
-
-        #    if 'ok' in response.lower():
-        #        self.is_alive = True
-        #        return True
-
-        #    self.LOGGER.debug("Command attempt #{} failed for command: '{}'".format(i, command))
-
-        #self.raise_result_error(command, response)
-        #return False # never reached
 
     def send_read_command(self, command: str) -> str:
         """Send given command to Tello and wait for its response.
@@ -535,7 +536,7 @@ class Tello:
     def connect(self, wait_for_state=True):
         """Enter SDK mode. Call this before any of the control functions.
         """
-        self.send_control_command("command")
+        self.send_control_command("command", robust=True)
 
         if wait_for_state:
             REPS = 20
@@ -837,7 +838,7 @@ class Tello:
         """Set the Wi-Fi SSID and password. The Tello will reboot afterwords.
         """
         cmd = 'wifi {} {}'.format(ssid, password)
-        self.send_control_command(cmd)
+        self.send_control_command(cmd, robust=True)
 
     def connect_to_wifi(self, ssid: str, password: str):
         """Connects to the Wi-Fi with SSID and password.
@@ -845,7 +846,7 @@ class Tello:
         Only works with Tello EDUs.
         """
         cmd = 'ap {} {}'.format(ssid, password)
-        self.send_control_command(cmd)
+        self.send_control_command(cmd, robust=True)
 
     def set_network_ports(self, state_packet_port: int, video_stream_port: int):
         """Sets the ports for state packets and video streaming
